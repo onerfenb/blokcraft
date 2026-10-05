@@ -10532,19 +10532,19 @@ button.lv-card:active { transform: translateY(3px); }
     return new Promise((resolve) => {
       let finished = false;
       const a = new Audio('audio/' + key + '.mp3');
-      const done = () => {
+      const done = (ok) => {
         if (finished) return;
         finished = true;
         if (audioEl === a) audioEl = null;
-        resolve();
+        resolve(ok !== false);
       };
-      a._done = done;
-      a.onended = done;
-      a.onerror = done;
+      a._done = () => done(true);
+      a.onended = () => done(true);
+      a.onerror = () => done(false);
       audioEl = a;
       const p = a.play();
-      if (p && p.catch) p.catch(done);
-      setTimeout(done, 15000);
+      if (p && p.catch) p.catch(() => done(false));
+      setTimeout(() => done(true), 15000);
     });
   }
 
@@ -10600,9 +10600,10 @@ button.lv-card:active { transform: translateY(3px); }
       const o = opts || {};
       const line = speakable(text);
       if (speech.log) speech.log(line);
-      if (line && voiceOn() && clips && clips.has(clipKey(line))) {
+      if (line && voiceOn() && !o.noClip && clips && clips.has(clipKey(line))) {
         ++token;
-        return playClip(clipKey(line), o.interrupt);
+        // if the clip cannot play (blocked / missing), fall back to the device voice
+        return playClip(clipKey(line), o.interrupt).then((ok) => (ok ? undefined : speech.say(text, Object.assign({}, o, { noClip: true }))));
       }
       const s = synth();
       if (!line || !s || !voiceOn() || !speech.available || typeof globalThis.SpeechSynthesisUtterance === 'undefined') return Promise.resolve();
