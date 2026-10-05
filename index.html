@@ -10489,10 +10489,70 @@ button.lv-card:active { transform: translateY(3px); }
 
   const voiceOn = () => !MC.store || !!MC.store.settings.voice;
 
+  // Pre-recorded clips (PWA build): audio/index.json lists keys; audio/<key>.mp3 = clip for that exact line.
+  // key = MC.hash(speakable(line)).toString(36). Lines without a clip fall back to speechSynthesis.
+  let clips = null;
+  let audioEl = null;
+  const clipKey = (line) => MC.hash(line).toString(36);
+  function loadClips() {
+    try {
+      if (typeof fetch !== 'function' || !/^https?:/.test(location.protocol)) return;
+      fetch('audio/index.json')
+        .then((r) => (r.ok ? r.json() : null))
+        .then((j) => {
+          if (j && Array.isArray(j.keys)) {
+            clips = new Set(j.keys);
+            flag();
+          }
+        })
+        .catch(() => {});
+    } catch (e) {
+      /* no clips */
+    }
+  }
+  function stopClip() {
+    if (audioEl) {
+      try {
+        audioEl.pause();
+      } catch (e) {
+        /* ignore */
+      }
+      if (audioEl._done) audioEl._done();
+      audioEl = null;
+    }
+  }
+  function playClip(key, interrupt) {
+    if (interrupt !== false) stopClip();
+    const s = synth();
+    try {
+      if (s) s.cancel();
+    } catch (e) {
+      /* ignore */
+    }
+    return new Promise((resolve) => {
+      let finished = false;
+      const a = new Audio('audio/' + key + '.mp3');
+      const done = () => {
+        if (finished) return;
+        finished = true;
+        if (audioEl === a) audioEl = null;
+        resolve();
+      };
+      a._done = done;
+      a.onended = done;
+      a.onerror = done;
+      audioEl = a;
+      const p = a.play();
+      if (p && p.catch) p.catch(done);
+      setTimeout(done, 15000);
+    });
+  }
+
   const speech = {
     /** true when speech exists and (once voices are known) a Turkish voice is installed. */
     get available() {
       const s = synth();
+      if (clips && clips.size) return true;
       if (!s || typeof globalThis.SpeechSynthesisUtterance === 'undefined') return false;
       return !voicesKnown || !!voice;
     },
@@ -10508,6 +10568,7 @@ button.lv-card:active { transform: translateY(3px); }
     init() {
       if (inited) return;
       inited = true;
+      loadClips();
       scan();
       const s = synth();
       if (s && s.addEventListener) {
@@ -10538,6 +10599,11 @@ button.lv-card:active { transform: translateY(3px); }
     say(text, opts) {
       const o = opts || {};
       const line = speakable(text);
+      if (speech.log) speech.log(line);
+      if (line && voiceOn() && clips && clips.has(clipKey(line))) {
+        ++token;
+        return playClip(clipKey(line), o.interrupt);
+      }
       const s = synth();
       if (!line || !s || !voiceOn() || !speech.available || typeof globalThis.SpeechSynthesisUtterance === 'undefined') return Promise.resolve();
       scan();
@@ -10571,6 +10637,7 @@ button.lv-card:active { transform: translateY(3px); }
     },
     stop() {
       token++;
+      stopClip();
       const s = synth();
       try {
         if (s) s.cancel();
